@@ -1,0 +1,60 @@
+{
+  "accounts": [
+    {
+      "username": "kazsieucapdz88@outlook.com",
+      "auth": "microsoft"
+    }
+  ],
+  "selectedAccount": 0,
+  "host": "hugosmp.net",
+  "port": 25565,
+  "wiggleInterval": 30000,
+  "wiggleAmplitude": 0.1,
+  "chatPingEnabled": false,
+  "chatPingInterval": 300000,
+  "chatPingMessage": "afk",
+  "afkRetryInterval": 5000,
+  "autoReconnect": {
+    "enabled": true,
+    "delay": 5000,
+    "onJoinCommand": "",
+    "maxAttempts": -1
+  },
+  "physics": {
+    "jumpEnabled": true,
+    "sprintEnabled": false,
+    "sneakEnabled": false,
+    "gravity": 0.08,
+    "airBoost": 0.005,
+    "jumpBoost": 0.42,
+    "waterSpeed": 0.02,
+    "swimSpeed": 0.02,
+    "terminalVelocity": 3.92
+  },
+  "movement": {
+    "autoJump": true,
+    "autoJumpHeight": 1,
+    "maxSpeed": 4.317,
+    "walkSpeed": 4.317,
+    "sprintSpeed": 5.612,
+    "followRange": 0,
+    "movementType": "none"
+  },
+  "pathfinding": {
+    "enabled": false,
+    "avoidWater": true,
+    "avoidLava": true,
+    "range": 32,
+    "maxFallDistance": 3,
+    "canOpenDoors": true,
+    "canBreakBlocks": false
+  },
+  "advanced": {
+    "viewDistance": 4,
+    "chatDelay": 0,
+    "reconnectDelay": 5000,
+    "autoRespawn": true,
+    "hideErrors": false,
+    "colorChat": true
+  }
+}

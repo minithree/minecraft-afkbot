@@ -7,7 +7,7 @@ const path       = require('path');
 const session    = require('express-session');
 const bodyParser = require('body-parser');
 const bcrypt     = require('bcryptjs');
-const { Auth } = require('mineflayer');
+const minecraftProtocol = require('minecraft-protocol');
 
 const app    = express();
 const server = http.createServer(app);
@@ -36,7 +36,7 @@ const sessionMiddleware = session({
 let config = {
   accounts: [],
   selectedAccount: 0,
-  host:               'your.server.address',
+  host:               '',
   port:               25565,
   wiggleInterval:     30000,
   wiggleAmplitude:    0.1,
@@ -116,6 +116,10 @@ let lastAFKCommand = null;
 let bot = null;
 let timers = [];
 let isConnecting = false;
+let pendingMsaAuth = null;
+let serverPing = null;
+let pingInProgress = false;
+let lastPingError = null;
 
 // Middleware
 app.use(bodyParser.urlencoded({ extended: true }));
@@ -188,6 +192,9 @@ function emitStatus() {
     selectedAccount:    config.selectedAccount,
     connected:          isConnected,
     username:           isConnected ? bot.username : (currentAccount ? currentAccount.username : '—'),
+    health:             isConnected && Number.isFinite(bot.health) ? bot.health : null,
+    food:               isConnected && Number.isFinite(bot.food) ? bot.food : null,
+    ping:               isConnected ? serverPing : null,
     host:               config.host,
     port:               config.port,
     wiggleInterval:     config.wiggleInterval,
@@ -317,27 +324,48 @@ function clearTimers() {
   timers = [];
 }
 
-async function getAuthUrl(account) {
-  try {
-    // For Microsoft authentication, we need to use the mineflayer Auth flow
-    // This is a simplified approach - in a real implementation, you'd want to use
-    // proper Microsoft OAuth flow with appropriate client ID and secret
-    return { 
-      authCode: "MANUAL", 
-      url: "https://login.live.com/oauth20_authorize.srf", 
-      account: account,
-      instructions: "Please follow Microsoft authentication flow manually"
-    };
-  } catch (err) {
-    log(`❌ Failed to get auth URL: ${err.message}`);
-    return null;
-  }
+function refreshServerPing() {
+  if (!bot || !bot.entity || pingInProgress) return;
+
+  const activeBot = bot;
+  pingInProgress = true;
+  minecraftProtocol.ping({
+    host: config.host,
+    port: config.port,
+    closeTimeout: 5000,
+    noPongTimeout: 3000
+  }).then(response => {
+    if (bot !== activeBot) return;
+    serverPing = Number.isFinite(response.latency) ? response.latency : null;
+    lastPingError = null;
+    emitStatus();
+  }).catch(err => {
+    if (bot !== activeBot) return;
+    serverPing = null;
+    if (lastPingError !== err.message) {
+      lastPingError = err.message;
+      log(`⚠️ Server ping unavailable: ${err.message}`);
+    }
+    emitStatus();
+  }).finally(() => {
+    pingInProgress = false;
+  });
 }
 
 let reconnectAttempts = 0;
 
-function startBot() {
-  if (isConnecting) return;
+function startBot(forceRestart = false) {
+  if (isConnecting && !forceRestart) return;
+  if (forceRestart) {
+    if (bot) {
+      bot.removeAllListeners();
+      bot.end();
+      bot = null;
+    }
+    isConnecting = false;
+    pendingMsaAuth = null;
+  }
+  serverPing = null;
   if (bot) {
     bot.end();
     bot.removeAllListeners();
@@ -347,6 +375,10 @@ function startBot() {
 
   if (config.accounts.length === 0) {
     log('⚠️ No accounts configured. Please add an account first.');
+    return;
+  }
+  if (!config.host) {
+    log('⚠️ Enter the Minecraft server address in dashboard settings before connecting.');
     return;
   }
 
@@ -363,7 +395,18 @@ function startBot() {
       checkTimeoutInterval: 60 * 1000,
       physicsEnabled: config.physics.jumpEnabled || config.physics.sprintEnabled || config.physics.sneakEnabled,
       viewDistance: config.advanced.viewDistance,
-      hideErrors: config.advanced.hideErrors
+      hideErrors: config.advanced.hideErrors,
+      onMsaCode: authInfo => {
+        const codeLifetime = Number(authInfo.expires_in);
+        pendingMsaAuth = {
+          account: account.username,
+          url: authInfo.verification_uri_complete || authInfo.verification_uri,
+          authCode: authInfo.user_code,
+          message: authInfo.message,
+          expiresAt: Date.now() + (Number.isFinite(codeLifetime) && codeLifetime > 0 ? codeLifetime : 900) * 1000
+        };
+        io.emit('authRequired', pendingMsaAuth);
+      }
     });
 
     // Patch chat to use the correct packet
@@ -387,9 +430,12 @@ function startBot() {
     bot.once('spawn', () => {
       isConnecting = false;
       reconnectAttempts = 0; // Reset attempts on successful connection
+      pendingMsaAuth = null;
       
       log(`✔️ §aLogged in as §e${bot.username}`);
       emitStatus();
+      refreshServerPing();
+      timers.push(setInterval(refreshServerPing, 15000));
 
       // Execute on-join command if configured
       if (config.autoReconnect.onJoinCommand) {
@@ -473,6 +519,8 @@ function startBot() {
       }
     });
 
+    bot.on('health', emitStatus);
+
     bot.on('message', msg => {
       // Parse chat message with color codes
       const text = msg.toString();
@@ -530,29 +578,34 @@ function handleDisconnect() {
 
 io.on('connection', socket => {
   emitStatus();
+  if (pendingMsaAuth && pendingMsaAuth.expiresAt > Date.now()) {
+    socket.emit('authRequired', pendingMsaAuth);
+  }
 
   socket.on('addAccount', async data => {
     try {
-      // For now, add the account directly
-      // In a proper implementation, you'd handle full Microsoft auth flow
+      const username = typeof data?.username === 'string' ? data.username.trim() : '';
+      if (!username) {
+        socket.emit('log', '❌ Enter a Microsoft account email to add it.');
+        return;
+      }
+      if (config.accounts.some(account => account.username.toLowerCase() === username.toLowerCase())) {
+        socket.emit('log', `⚠️ Account ${username} is already registered.`);
+        return;
+      }
+
       config.accounts.push({
-        username: data.username,
-        auth: 'microsoft',
-        // In a real implementation, you'd get the proper auth token
-        authType: 'microsoft'
+        username,
+        auth: 'microsoft'
       });
-      
+      config.selectedAccount = config.accounts.length - 1;
       saveConfig();
       emitStatus();
-      log(`✔️ Account ${data.username} added. You may need to authenticate on first connection.`);
+      log(`✔️ Account ${username} added. Complete Microsoft sign-in in the browser to authenticate.`);
+      startBot();
     } catch (err) {
       log(`❌ Failed to add account: ${err.message}`);
     }
-  });
-
-  socket.on('completeAuth', async data => {
-    log(`⚠️ Authentication completed for ${data.account}`);
-    // In a proper implementation, you'd handle the token here
   });
 
   socket.on('removeAccount', index => {
@@ -565,6 +618,29 @@ io.on('connection', socket => {
       emitStatus();
       log(`✔️ Removed account ${removed.username}`);
     }
+  });
+
+  socket.on('editAccount', data => {
+    const index = Number(data?.index);
+    const username = typeof data?.username === 'string' ? data.username.trim() : '';
+    if (!Number.isInteger(index) || index < 0 || index >= config.accounts.length || !username) {
+      socket.emit('log', '❌ Select an account and enter a valid Microsoft account email.');
+      return;
+    }
+    if (config.accounts.some((account, accountIndex) =>
+      accountIndex !== index && account.username.toLowerCase() === username.toLowerCase())) {
+      socket.emit('log', `⚠️ Account ${username} is already registered.`);
+      return;
+    }
+
+    const account = config.accounts[index];
+    const previousUsername = account.username;
+    if (previousUsername === username) return;
+    account.username = username;
+    saveConfig();
+    emitStatus();
+    log(`✔️ Updated account ${previousUsername} to ${username}. Microsoft sign-in may be required again.`);
+    if (index === config.selectedAccount) startBot(true);
   });
 
   socket.on('setSettings', data => {

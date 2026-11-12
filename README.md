@@ -37,9 +37,10 @@ An AFK system for Minecraft with a user-friendly web interface. This tool helps 
    npm install
    ```
 
-3. Start the application:
+3. Check the server code and start the application:
    ```bash
-   node server.js
+   npm run build
+   npm run start
    ```
 
 4. Open your browser and navigate to:
@@ -57,7 +58,7 @@ The application creates a `config.json` file that stores your settings between s
     { "username": "you@example.com", "auth": "microsoft" }
   ],
   "selectedAccount": 0,
-  "host": "your.server.address",
+  "host": "",
   "port": 25565,
   "wiggleInterval": 30000,
   "wiggleAmplitude": 0.1,
@@ -71,9 +72,10 @@ The application creates a `config.json` file that stores your settings between s
 ## Usage
 
 1. **Add Accounts**:
-   - Enter your Minecraft account email
-   - Select the authentication type (Microsoft/Mojang)
-   - Click "Add Account"
+   - Enter your Microsoft account email and click "Add New Account"
+   - Open the Microsoft sign-in page shown in the dashboard and enter its one-time code
+   - The bot completes authentication automatically; tokens are cached by Mineflayer for future connections
+   - Use "Edit Email" on a registered account to change its email; the active account may require Microsoft sign-in again
 
 2. **Configure Settings**:
    - Set server address and port
@@ -84,6 +86,9 @@ The application creates a `config.json` file that stores your settings between s
 3. **AFK Commands**:
    - Send commands via the chat input
    - The system recognizes `/afk` commands for re-sending after disconnections
+   - The dashboard shows live health, food, and available ping data alongside chat and system logs
+
+`npm run build` checks the Node.js server file for syntax errors. The project does not require a separate compilation step.
 
 ## Dependencies
 

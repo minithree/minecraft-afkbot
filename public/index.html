@@ -416,6 +416,15 @@
       gap: 0.75rem;
     }
 
+    .account-actions {
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    .account-actions button {
+      padding: 0.5rem 0.75rem;
+    }
+
     .active-badge {
       background: var(--primary);
       color: white;
@@ -527,6 +536,12 @@
         </span>
         <strong>Active Account:</strong>
         <span id="user">—</span>
+        <strong>Health:</strong>
+        <span id="health">—</span>
+        <strong>Food:</strong>
+        <span id="food">—</span>
+        <strong>Ping:</strong>
+        <span id="ping">—</span>
         <strong>Server:</strong>
         <span><span id="host">—</span>:<span id="port">—</span></span>
         <strong>Last AFK Cmd:</strong>
@@ -807,8 +822,11 @@
     <section class="card">
       <div class="card-header">
         <div class="icon"><i class="fas fa-comments"></i></div>
-        <h2>Chat & Logs</h2>
+        <h2>Live Chat & System Log</h2>
       </div>
+      <p style="color: var(--text-secondary); margin-bottom: 0.75rem;">
+        Server chat, sent commands, connection events, and bot logs appear here.
+      </p>
       <div class="chat-container">
         <div id="log"></div>
         <form id="chatForm" class="chat-form">
@@ -824,17 +842,15 @@
   <div id="authModal" class="auth-modal" style="display: none;">
     <div class="auth-modal-content">
       <h3>Microsoft Authentication Required</h3>
-      <p>Click the button below to authenticate with Microsoft:</p>
-      <a id="authLink" href="#" target="_blank" class="button">
+      <p id="authAccount"></p>
+      <p>Open Microsoft sign-in and enter this one-time code. The bot will finish signing in automatically.</p>
+      <a id="authLink" href="#" target="_blank" rel="noopener noreferrer" class="button">
         <i class="fab fa-microsoft"></i> Open Microsoft Login
       </a>
-      <p style="margin-top: 1rem;">Code: <strong id="authCode"></strong></p>
+      <p style="margin-top: 1rem;">One-time code: <strong id="authCode"></strong></p>
       <div class="auth-modal-buttons">
-        <button onclick="completeAuth()">
-          <i class="fas fa-check"></i> Complete Authentication
-        </button>
-        <button onclick="cancelAuth()" class="danger">
-          <i class="fas fa-times"></i> Cancel
+        <button onclick="cancelAuth()">
+          <i class="fas fa-times"></i> Close
         </button>
       </div>
     </div>
@@ -885,7 +901,6 @@
     const selAcct = document.getElementById('selectedAccount');
     const accountList = document.getElementById('accountList');
     let lastAFKCmd = null;
-    let pendingAuth = null;
 
     // Minecraft color codes to CSS
     const MINECRAFT_COLORS = {
@@ -958,16 +973,34 @@
 
         const item = document.createElement('div');
         item.className = `account-item ${i === selected ? 'active' : ''}`;
-        item.innerHTML = `
-          <div class="account-info">
-            <i class="fab fa-microsoft" style="color: #00a4ef;"></i>
-            <span>${a.username}</span>
-            ${i === selected ? '<span class="active-badge"><i class="fas fa-check"></i> Active</span>' : ''}
-          </div>
-          <button class="danger" onclick="removeAccount(${i})">
-            <i class="fas fa-trash-alt"></i> Remove
-          </button>
-        `;
+        const info = document.createElement('div');
+        info.className = 'account-info';
+        const icon = document.createElement('i');
+        icon.className = 'fab fa-microsoft';
+        icon.style.color = '#00a4ef';
+        const username = document.createElement('span');
+        username.textContent = a.username;
+        info.append(icon, username);
+        if (i === selected) {
+          const badge = document.createElement('span');
+          badge.className = 'active-badge';
+          badge.textContent = 'Active';
+          info.appendChild(badge);
+        }
+
+        const actions = document.createElement('div');
+        actions.className = 'account-actions';
+        const editButton = document.createElement('button');
+        editButton.type = 'button';
+        editButton.textContent = 'Edit Email';
+        editButton.addEventListener('click', () => editAccount(i, a.username));
+        const removeButton = document.createElement('button');
+        removeButton.type = 'button';
+        removeButton.className = 'danger';
+        removeButton.textContent = 'Remove';
+        removeButton.addEventListener('click', () => removeAccount(i));
+        actions.append(editButton, removeButton);
+        item.append(info, actions);
         accountList.appendChild(item);
       });
       
@@ -984,24 +1017,22 @@
       }
     }
 
+    function editAccount(index, currentUsername) {
+      const username = prompt('Enter the new Microsoft account email:', currentUsername);
+      if (username !== null) {
+        socket.emit('editAccount', { index, username: username.trim() });
+      }
+    }
+
     function showAuthModal(authInfo) {
-      pendingAuth = authInfo;
       document.getElementById('authModal').style.display = 'flex';
+      document.getElementById('authAccount').textContent = `Account: ${authInfo.account}`;
       document.getElementById('authLink').href = authInfo.url;
       document.getElementById('authCode').textContent = authInfo.authCode;
     }
 
-    function completeAuth() {
-      if (pendingAuth) {
-        socket.emit('completeAuth', pendingAuth);
-        document.getElementById('authModal').style.display = 'none';
-        pendingAuth = null;
-      }
-    }
-
     function cancelAuth() {
       document.getElementById('authModal').style.display = 'none';
-      pendingAuth = null;
     }
 
     socket.on('status', s => {
@@ -1017,9 +1048,13 @@
       }
       
       document.getElementById('user').textContent = s.username;
+      document.getElementById('health').textContent = s.connected && s.health !== null ? `${s.health} / 20` : '—';
+      document.getElementById('food').textContent = s.connected && s.food !== null ? `${s.food} / 20` : '—';
+      document.getElementById('ping').textContent = s.connected && s.ping !== null ? `${s.ping} ms` : '—';
       document.getElementById('host').textContent = s.host;
       document.getElementById('port').textContent = s.port;
       document.getElementById('lastAFK').textContent = lastAFKCmd || '—';
+      if (s.connected) cancelAuth();
       
       const form = document.forms.settingsForm;
       form.host.value = s.host;
