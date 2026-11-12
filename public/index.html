@@ -981,6 +981,19 @@
         const username = document.createElement('span');
         username.textContent = a.username;
         info.append(icon, username);
+        if (a.proxy && a.proxy.enabled) {
+          const proxyBadge = document.createElement('span');
+          proxyBadge.textContent = `${a.proxy.type.toUpperCase()} ${a.proxy.host}:${a.proxy.port}`;
+          proxyBadge.style.display = 'inline-block';
+          proxyBadge.style.marginLeft = '0.5rem';
+          proxyBadge.style.padding = '0.2rem 0.45rem';
+          proxyBadge.style.borderRadius = '999px';
+          proxyBadge.style.background = 'rgba(52, 152, 219, 0.15)';
+          proxyBadge.style.color = '#8ad0ff';
+          proxyBadge.style.fontSize = '0.72rem';
+          proxyBadge.style.fontWeight = '600';
+          info.appendChild(proxyBadge);
+        }
         if (i === selected) {
           const badge = document.createElement('span');
           badge.className = 'active-badge';
@@ -994,12 +1007,16 @@
         editButton.type = 'button';
         editButton.textContent = 'Edit Email';
         editButton.addEventListener('click', () => editAccount(i, a.username));
+        const proxyButton = document.createElement('button');
+        proxyButton.type = 'button';
+        proxyButton.textContent = 'Proxy';
+        proxyButton.addEventListener('click', () => editAccountProxy(i, a.proxy || {}));
         const removeButton = document.createElement('button');
         removeButton.type = 'button';
         removeButton.className = 'danger';
         removeButton.textContent = 'Remove';
         removeButton.addEventListener('click', () => removeAccount(i));
-        actions.append(editButton, removeButton);
+        actions.append(editButton, proxyButton, removeButton);
         item.append(info, actions);
         accountList.appendChild(item);
       });
@@ -1022,6 +1039,28 @@
       if (username !== null) {
         socket.emit('editAccount', { index, username: username.trim() });
       }
+    }
+
+    function editAccountProxy(index, currentProxy = {}) {
+      const host = prompt('Proxy host (leave empty to disable):', currentProxy.host || '');
+      if (host === null) return;
+
+      const port = Number(prompt('Proxy port:', String(currentProxy.port || 1080)) || 1080);
+      const type = prompt('Proxy type (socks5 or socks4):', currentProxy.type || 'socks5');
+      const username = prompt('Proxy username (optional):', currentProxy.username || '');
+      const password = prompt('Proxy password (optional):', currentProxy.password || '');
+
+      socket.emit('editAccountProxy', {
+        index,
+        proxy: {
+          enabled: Boolean(host && host.trim()),
+          host: (host || '').trim(),
+          port: Number.isFinite(port) ? port : 1080,
+          type: type === 'socks4' ? 'socks4' : 'socks5',
+          username: username || '',
+          password: password || ''
+        }
+      });
     }
 
     function showAuthModal(authInfo) {

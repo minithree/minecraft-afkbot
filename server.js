@@ -8,6 +8,7 @@ const session    = require('express-session');
 const bodyParser = require('body-parser');
 const bcrypt     = require('bcryptjs');
 const minecraftProtocol = require('minecraft-protocol');
+const { SocksClient } = require('socks');
 
 const app    = express();
 const server = http.createServer(app);
@@ -97,6 +98,7 @@ try {
   if (fs.existsSync(CONFIG_PATH)) {
     Object.assign(config, JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8')));
   }
+  config.accounts = Array.isArray(config.accounts) ? config.accounts.map(normalizeAccount) : [];
   if (fs.existsSync(USERS_PATH)) {
     users = JSON.parse(fs.readFileSync(USERS_PATH, 'utf-8'));
   } else {
@@ -110,6 +112,76 @@ try {
   }
 } catch (err) {
   console.error('Error loading config/users:', err);
+}
+
+function getDefaultProxy() {
+  return {
+    enabled: false,
+    host: '',
+    port: 1080,
+    type: 'socks5',
+    username: '',
+    password: ''
+  };
+}
+
+function normalizeAccount(account) {
+  if (!account || typeof account !== 'object') {
+    return {
+      username: '',
+      auth: 'microsoft',
+      proxy: getDefaultProxy()
+    };
+  }
+
+  const proxy = {
+    ...getDefaultProxy(),
+    ...(account.proxy || {})
+  };
+
+  if (!proxy.type || !['socks4', 'socks5'].includes(proxy.type)) {
+    proxy.type = 'socks5';
+  }
+
+  proxy.port = Number(proxy.port) || 1080;
+  proxy.enabled = Boolean(proxy.enabled && proxy.host && String(proxy.host).trim());
+
+  return {
+    ...account,
+    username: typeof account.username === 'string' ? account.username : '',
+    auth: account.auth || 'microsoft',
+    proxy
+  };
+}
+
+function getAccountProxyConfig(account) {
+  const proxy = account && account.proxy ? account.proxy : getDefaultProxy();
+  if (!proxy.enabled || !proxy.host || !String(proxy.host).trim()) {
+    return null;
+  }
+
+  return {
+    host: String(proxy.host).trim(),
+    port: Number(proxy.port) || 1080,
+    type: proxy.type === 'socks4' ? 4 : 5,
+    userId: proxy.username ? String(proxy.username).trim() : undefined,
+    password: proxy.password ? String(proxy.password) : undefined
+  };
+}
+
+function sanitizeAccount(account) {
+  const normalized = normalizeAccount(account);
+  return {
+    username: normalized.username,
+    auth: normalized.auth,
+    proxy: {
+      enabled: normalized.proxy.enabled,
+      host: normalized.proxy.host,
+      port: normalized.proxy.port,
+      type: normalized.proxy.type,
+      username: normalized.proxy.username || ''
+    }
+  };
 }
 
 let lastAFKCommand = null;
@@ -185,10 +257,7 @@ function emitStatus() {
   const currentAccount = config.accounts[config.selectedAccount];
   
   io.emit('status', {
-    accounts:           config.accounts.map(acc => ({ 
-      username: acc.username, 
-      auth: acc.auth 
-    })),
+    accounts:           config.accounts.map(sanitizeAccount),
     selectedAccount:    config.selectedAccount,
     connected:          isConnected,
     username:           isConnected ? bot.username : (currentAccount ? currentAccount.username : '—'),
@@ -212,6 +281,7 @@ function emitStatus() {
 }
 
 function saveConfig() {
+  config.accounts = Array.isArray(config.accounts) ? config.accounts.map(normalizeAccount) : [];
   try {
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
     log('⚙️ Settings saved');
@@ -383,15 +453,16 @@ function startBot(forceRestart = false) {
   }
 
   const account = config.accounts[config.selectedAccount] || config.accounts[0];
+  const proxyConfig = getAccountProxyConfig(account);
   isConnecting = true;
   
   try {
-    bot = mineflayer.createBot({
+    const botOptions = {
       host:     config.host,
       port:     config.port,
       auth:     account.auth,
       username: account.username,
-      version:  '1.19.4', // Auto-detect version
+      version:  '1.21.11',
       checkTimeoutInterval: 60 * 1000,
       physicsEnabled: config.physics.jumpEnabled || config.physics.sprintEnabled || config.physics.sneakEnabled,
       viewDistance: config.advanced.viewDistance,
@@ -407,7 +478,37 @@ function startBot(forceRestart = false) {
         };
         io.emit('authRequired', pendingMsaAuth);
       }
-    });
+    };
+
+    if (proxyConfig) {
+      botOptions.connect = client => {
+        SocksClient.createConnection({
+          proxy: {
+            host: proxyConfig.host,
+            port: proxyConfig.port,
+            type: proxyConfig.type,
+            userId: proxyConfig.userId,
+            password: proxyConfig.password
+          },
+          command: 'connect',
+          destination: {
+            host: config.host,
+            port: Number(config.port) || 25565
+          }
+        }, (err, info) => {
+          if (err) {
+            log(`§c❌ Failed to connect through proxy ${proxyConfig.host}:${proxyConfig.port}: ${err.message}`);
+            client.emit('error', err);
+            return;
+          }
+
+          client.setSocket(info.socket);
+          client.emit('connect');
+        });
+      };
+    }
+
+    bot = mineflayer.createBot(botOptions);
 
     // Patch chat to use the correct packet
     bot.chat = (message) => {
@@ -596,7 +697,8 @@ io.on('connection', socket => {
 
       config.accounts.push({
         username,
-        auth: 'microsoft'
+        auth: 'microsoft',
+        proxy: getDefaultProxy()
       });
       config.selectedAccount = config.accounts.length - 1;
       saveConfig();
@@ -640,6 +742,36 @@ io.on('connection', socket => {
     saveConfig();
     emitStatus();
     log(`✔️ Updated account ${previousUsername} to ${username}. Microsoft sign-in may be required again.`);
+    if (index === config.selectedAccount) startBot(true);
+  });
+
+  socket.on('editAccountProxy', data => {
+    const index = Number(data?.index);
+    if (!Number.isInteger(index) || index < 0 || index >= config.accounts.length) {
+      socket.emit('log', '❌ Select a valid account to configure proxy settings.');
+      return;
+    }
+
+    const proxyData = data?.proxy || {};
+    const account = config.accounts[index];
+    account.proxy = {
+      ...getDefaultProxy(),
+      ...(account.proxy || {}),
+      enabled: Boolean(proxyData.enabled && String(proxyData.host || '').trim()),
+      host: String(proxyData.host || '').trim(),
+      port: Number(proxyData.port) || 1080,
+      type: proxyData.type === 'socks4' ? 'socks4' : 'socks5',
+      username: typeof proxyData.username === 'string' ? proxyData.username.trim() : '',
+      password: typeof proxyData.password === 'string' ? proxyData.password : ''
+    };
+
+    if (!account.proxy.enabled || !account.proxy.host) {
+      account.proxy = getDefaultProxy();
+    }
+
+    saveConfig();
+    emitStatus();
+    log(`✔️ Proxy settings updated for ${account.username}.`);
     if (index === config.selectedAccount) startBot(true);
   });
 

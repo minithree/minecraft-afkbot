@@ -55,7 +55,18 @@ The application creates a `config.json` file that stores your settings between s
 ```json
 {
   "accounts": [
-    { "username": "you@example.com", "auth": "microsoft" }
+    {
+      "username": "you@example.com",
+      "auth": "microsoft",
+      "proxy": {
+        "enabled": false,
+        "host": "",
+        "port": 1080,
+        "type": "socks5",
+        "username": "",
+        "password": ""
+      }
+    }
   ],
   "selectedAccount": 0,
   "host": "",

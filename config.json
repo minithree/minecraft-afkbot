@@ -1,10 +1,5 @@
 {
-  "accounts": [
-    {
-      "username": "kazsieucapdz88@outlook.com",
-      "auth": "microsoft"
-    }
-  ],
+  "accounts": [],
   "selectedAccount": 0,
   "host": "hugosmp.net",
   "port": 25565,
